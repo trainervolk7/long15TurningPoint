@@ -1,5 +1,51 @@
 #include "main.h"
 
+#define clampPiston 'B'
+#define anglerPiston 'A'
+#define MAX_HEIGHT 2200
+#define MIN_HEIGHT 2
+
+Controller controller;
+
+pros::ADIDigitalOut clamp (clampPiston);
+pros::ADIDigitalOut angler (anglerPiston);
+ControllerButton clampButton (ControllerDigital::R1);
+ControllerButton anglerButton (ControllerDigital::R2);
+
+ControllerButton liftUpButton (ControllerDigital::L1);
+ControllerButton liftDownButton (ControllerDigital::L2);
+
+ControllerButton ringIntakeButton (ControllerDigital::Y);
+ControllerButton ringNonIntakeButton (ControllerDigital::B);
+
+bool isClampClosed = false;
+bool isAnglerLifted = false;
+bool isRingOn = false;
+
+MotorGroup lift {-3,13};
+Motor ringMotor {14};
+
+std::shared_ptr<ChassisController> drive =
+	ChassisControllerBuilder()
+		.withMotors( {-11,-12},{1,2})
+		// COLOR_BLUE gearset, 4 in wheel diam, 11.5 im wheel track
+		// 36 to 60 gear ratio
+		.withDimensions({AbstractMotor::gearset::blue, (60.0/36.0)},{{3.25_in, 12.25_in}, imev5BlueTPR})
+		.build();
+
+std::shared_ptr<AsyncPositionController<double, double>> liftControl =
+	AsyncPosControllerBuilder()
+		.withMotor(lift)
+		.build();
+
+
+
+int height = 0;
+
+// Functions
+void checkClamp();
+void ring();
+void armPID();
 /**
  * A callback function for LLEMU's center button.
  *
@@ -7,6 +53,7 @@
  * "I was pressed!" and nothing.
  */
 void on_center_button() {
+	/*
 	static bool pressed = false;
 	pressed = !pressed;
 	if (pressed) {
@@ -14,6 +61,7 @@ void on_center_button() {
 	} else {
 		pros::lcd::clear_line(2);
 	}
+	*/
 }
 
 /**
@@ -23,10 +71,12 @@ void on_center_button() {
  * to keep execution time for this mode under a few seconds.
  */
 void initialize() {
+	clamp.set_value(true);
+	/*
 	pros::lcd::initialize();
 	pros::lcd::set_text(1, "Hello PROS User!");
-
 	pros::lcd::register_btn1_cb(on_center_button);
+	*/
 }
 
 /**
@@ -58,7 +108,80 @@ void competition_initialize() {}
  * will be stopped. Re-enabling the robot will restart the task, not re-start it
  * from where it left off.
  */
-void autonomous() {}
+void autonomous() {
+	std::shared_ptr<AsyncMotionProfileController> slowDrive =
+  AsyncMotionProfileControllerBuilder()
+    .withLimits({
+      0.5, // Maximum linear velocity of the Chassis in m/s
+      1.0, // Maximum linear acceleration of the Chassis in m/s/s
+      10.0 // Maximum linear jerk of the Chassis in m/s/s/s
+    })
+    .withOutput(drive)
+    .buildMotionProfileController();
+
+	std::shared_ptr<AsyncMotionProfileController> fastDrive =
+  AsyncMotionProfileControllerBuilder()
+    .withLimits({
+      5.0, // Maximum linear velocity of the Chassis in m/s
+      6.0, // Maximum linear acceleration of the Chassis in m/s/s
+      10.0 // Maximum linear jerk of the Chassis in m/s/s/s
+    })
+    .withOutput(drive)
+    .buildMotionProfileController();
+
+		fastDrive->generatePath(
+			{{0_ft, 0_ft, 0_deg}, {5.0_ft, 0.0_ft, 0.0_deg}}, "A");
+
+		fastDrive->generatePath(
+			{{0_ft, 0_ft, 0_deg}, {2.5_ft, 0_ft, 0_deg}}, "B");
+
+		fastDrive->generatePath(
+			{{0_ft, 0_ft, 0_deg}, {2.8_ft, 0_ft, 0_deg}}, "C");
+
+		slowDrive->generatePath(
+			{{0_ft, 0_ft, 0_deg}, {1.0_ft, 0_ft, 0_deg}}, "D");
+
+		slowDrive->generatePath(
+			{{0_ft, 0_ft, 0_deg}, {1.75_ft, 0_ft, 0_deg}}, "F");
+
+		slowDrive->generatePath(
+			{{0_ft, 0_ft, 0_deg}, {1.5_ft, 0_ft, 0_deg}}, "G");
+
+		liftControl->setTarget(-100);
+		clamp.set_value(false);
+		fastDrive->setTarget("A");
+		fastDrive->waitUntilSettled();
+		clamp.set_value(true);
+		liftControl->setTarget(-700);
+		fastDrive->setTarget("B", true);
+		fastDrive->waitUntilSettled();
+		drive->turnAngle(-90_deg);
+
+		fastDrive->setTarget("B");
+		fastDrive->waitUntilSettled();
+		liftControl->setTarget(-2000);
+		pros::delay(20);
+		drive->turnAngle(-90_deg);
+		pros::delay(500);
+		slowDrive->setTarget("G");
+		slowDrive->waitUntilSettled();
+		clamp.set_value(false);
+		drive->turnAngle(-25_deg);
+		slowDrive->setTarget("D", true);
+		slowDrive->waitUntilSettled();
+		drive->turnAngle(-90_deg);
+		liftControl->setTarget(-100);
+
+		fastDrive->setTarget("C");
+		fastDrive->waitUntilSettled();
+		clamp.set_value(true);
+		ringMotor.moveVelocity(200);
+		slowDrive->setTarget("F", true);
+		slowDrive->waitUntilSettled();
+		clamp.set_value(false);
+		slowDrive->setTarget("D", true);
+		slowDrive->waitUntilSettled();
+}
 
 /**
  * Runs the operator control code. This function will be started in its own task
@@ -73,20 +196,117 @@ void autonomous() {}
  * operator control task will be stopped. Re-enabling the robot will restart the
  * task, not resume it from where it left off.
  */
+
 void opcontrol() {
-	pros::Controller master(pros::E_CONTROLLER_MASTER);
-	pros::Motor left_mtr(1);
-	pros::Motor right_mtr(2);
 
 	while (true) {
-		pros::lcd::print(0, "%d %d %d", (pros::lcd::read_buttons() & LCD_BTN_LEFT) >> 2,
-		                 (pros::lcd::read_buttons() & LCD_BTN_CENTER) >> 1,
-		                 (pros::lcd::read_buttons() & LCD_BTN_RIGHT) >> 0);
-		int left = master.get_analog(ANALOG_LEFT_Y);
-		int right = master.get_analog(ANALOG_RIGHT_Y);
+		drive->getModel() -> arcade(controller.getAnalog(ControllerAnalog::leftY),
+			controller.getAnalog(ControllerAnalog::rightX));
 
-		left_mtr = left;
-		right_mtr = right;
-		pros::delay(20);
+		checkClamp();
+		ring();
+		armPID();
+
+		pros::delay(10);
 	}
 }
+
+void armPID() {
+	if (liftUpButton.isPressed() && height < MAX_HEIGHT) {
+      // If the goal height is not at maximum and the up button is pressed, increase the setpoint
+			height += 10;
+			liftControl->setTarget(-height);
+  }
+	else if (liftDownButton.isPressed() && height > MIN_HEIGHT) {
+			height -= 10;
+			liftControl->setTarget(-height);
+  }
+}
+
+void checkClamp() {
+	if (clampButton.isPressed())
+	{
+		if(isClampClosed){
+			clamp.set_value(false);
+			isClampClosed=false;
+			pros::delay(200);
+
+		}else{
+			clamp.set_value(true);
+			isClampClosed=true;
+			pros::delay(200);
+		}
+	}
+
+	if (anglerButton.isPressed())
+	{
+		if(isAnglerLifted){
+			angler.set_value(false);
+			isAnglerLifted=false;
+			pros::delay(200);
+		}else{
+			angler.set_value(true);
+			isAnglerLifted=true;
+			pros::delay(200);
+		}
+	}
+}
+
+void ring() {
+	if (ringIntakeButton.isPressed())
+	{
+		if (isRingOn == false) {
+			ringMotor.moveVelocity(300);
+			isRingOn = true;
+		} else {
+			ringMotor.moveVelocity(0);
+			isRingOn = false;
+		}
+		pros::delay(200);
+	}
+
+	if (ringNonIntakeButton.isPressed())
+	{
+		if (isRingOn == false) {
+			ringMotor.moveVelocity(-300);
+			isRingOn = true;
+		} else {
+			ringMotor.moveVelocity(0);
+			isRingOn = false;
+		}
+		pros::delay(200);
+	}
+}
+
+/*
+
+old auto
+autoDrive->generatePath(
+	{{0_ft, 0_ft, 0_deg}, {5.2_ft, 0_ft, 0_deg}}, "F");
+autoDrive->generatePath(
+	{{0_ft, 0_ft, 10_deg}, {1.5_ft, 3.0_ft, 90_deg}}, "B");
+
+liftControl->setTarget(-100);
+clamp.set_value(false);
+autoDrive->setTarget("F");
+autoDrive->waitUntilSettled();
+
+clamp.set_value(true);
+
+pros::delay(20);
+autoDrive->setTarget("B", true);
+liftControl->setTarget(-700);
+autoDrive->waitUntilSettled();
+liftControl->setTarget(-1000);
+pros::delay(50);
+drive->turnAngle(-90_deg);
+pros::delay(50);
+liftControl->setTarget(-MAX_HEIGHT);
+drive->turnAngle(-80_deg);
+pros::delay(50);
+drive->moveDistance(0.75_ft);
+clamp.set_value(false);
+pros::delay(50);
+drive->moveDistance(-0.75_ft);
+
+*/
