@@ -1,39 +1,38 @@
 #include "main.h"
-
 #define clampPiston 'B'
 #define anglerPiston 'A'
-#define MAX_HEIGHT 2200
-#define MIN_HEIGHT 2
-
-Controller controller;
-
-pros::ADIDigitalOut clamp (clampPiston);
-pros::ADIDigitalOut angler (anglerPiston);
-ControllerButton clampButton (ControllerDigital::R1);
-ControllerButton anglerButton (ControllerDigital::R2);
-
-ControllerButton liftUpButton (ControllerDigital::L1);
-ControllerButton liftDownButton (ControllerDigital::L2);
-
-ControllerButton ringIntakeButton (ControllerDigital::Y);
-ControllerButton ringNonIntakeButton (ControllerDigital::B);
-
-bool isClampClosed = false;
-bool isAnglerLifted = false;
-bool isRingOn = false;
-
-MotorGroup lift {-3,13};
-Motor ringMotor {14};
 
 std::shared_ptr<ChassisController> drive =
 	ChassisControllerBuilder()
 		.withMotors( {-11,-12},{1,2})
-		// COLOR_BLUE gearset, 4 in wheel diam, 11.5 im wheel track
+		// Green gearset, 4 in wheel diam, 11.5 im wheel track
 		// 36 to 60 gear ratio
-		.withDimensions({AbstractMotor::gearset::blue, (60.0/36.0)},{{3.25_in, 12.25_in}, imev5BlueTPR})
+		.withDimensions({AbstractMotor::gearset::blue, (60.0/36.0)},{{3.25_in, 11_in}, imev5GreenTPR})
 		.build();
-
-std::shared_ptr<AsyncPositionController<double, double>> liftControl =
+		std::shared_ptr<AsyncMotionProfileController> profileController =
+				  AsyncMotionProfileControllerBuilder()
+				    .withLimits({
+				      1.0, // Maximum linear velocity of the Chassis in m/s
+				      2.0, // Maximum linear acceleration of the Chassis in m/s/s
+				      10.0 // Maximum linear jerk of the Chassis in m/s/s/s
+				    })
+				    .withOutput(drive)
+						.buildMotionProfileController();
+		Controller controller;
+		pros::ADIDigitalOut clamp (clampPiston);
+		pros::ADIDigitalOut angler (anglerPiston);
+		ControllerButton clampButton (ControllerDigital::R1);
+		ControllerButton anglerButton (ControllerDigital::R2);
+		ControllerButton liftUpButton (ControllerDigital::L1);
+		ControllerButton liftDownButton (ControllerDigital::L2);
+		ControllerButton ringIntakeButton (ControllerDigital::Y);
+		ControllerButton ringNonIntakeButton (ControllerDigital::B);
+		bool isClampClosed = false;
+		bool isAnglerLifted =false;
+		bool isRingOn = false;
+		MotorGroup lift {-3,13};
+		Motor ringMotor {14};
+		std::shared_ptr<AsyncPositionController<double, double>> liftControl =
 	AsyncPosControllerBuilder()
 		.withMotor(lift)
 		.build();
@@ -72,6 +71,7 @@ void on_center_button() {
  */
 void initialize() {
 	clamp.set_value(true);
+	lift.setBrakeMode(AbstractMotor::brakeMode(2));
 	/*
 	pros::lcd::initialize();
 	pros::lcd::set_text(1, "Hello PROS User!");
@@ -198,49 +198,25 @@ void autonomous() {
  */
 
 void opcontrol() {
-
 	while (true) {
-		drive->getModel() -> arcade(controller.getAnalog(ControllerAnalog::leftY),
-			controller.getAnalog(ControllerAnalog::rightX));
-
-		checkClamp();
-		ring();
-		armPID();
-
+		drive->getModel() -> arcade(controller.getAnalog(ControllerAnalog::leftY), controller.getAnalog(ControllerAnalog::rightX));
 		pros::delay(10);
-	}
-}
-
-void armPID() {
-	if (liftUpButton.isPressed() && height < MAX_HEIGHT) {
-      // If the goal height is not at maximum and the up button is pressed, increase the setpoint
-			height += 10;
-			liftControl->setTarget(-height);
-  }
-	else if (liftDownButton.isPressed() && height > MIN_HEIGHT) {
-			height -= 10;
-			liftControl->setTarget(-height);
-  }
-}
-
-void checkClamp() {
-	if (clampButton.isPressed())
-	{
-		if(isClampClosed){
+		if (clampButton.isPressed())
+		{
+			if(isClampClosed){
 			clamp.set_value(false);
 			isClampClosed=false;
 			pros::delay(200);
-
 		}else{
 			clamp.set_value(true);
 			isClampClosed=true;
 			pros::delay(200);
 		}
-	}
+		}
 
-	if (anglerButton.isPressed())
-	{
-		if(isAnglerLifted){
+		if (anglerButton.isPressed())
+		{
+			if(isAnglerLifted){
 			angler.set_value(false);
 			isAnglerLifted=false;
 			pros::delay(200);
@@ -249,11 +225,42 @@ void checkClamp() {
 			isAnglerLifted=true;
 			pros::delay(200);
 		}
-	}
-}
+		}
 
-void ring() {
-	if (ringIntakeButton.isPressed())
+		if (liftUpButton.changedToPressed())
+		{
+			lift.moveVelocity(-100);
+			if (liftUpButton.isPressed()&&liftDownButton.isPressed())
+			{
+				lift.moveVoltage(-500);
+			}
+		}
+		else if(liftUpButton.changedToReleased())
+		{
+			lift.moveVoltage(0);
+			if (liftUpButton.isPressed()&&liftDownButton.isPressed())
+			{
+				lift.moveVoltage(-500);
+			}
+		}
+		else if(liftDownButton.changedToPressed())
+		{
+			lift.moveVelocity(900);
+			if (liftUpButton.isPressed()&&liftDownButton.isPressed())
+			{
+				lift.moveVoltage(-500);
+			}
+		}
+		else if (liftDownButton.changedToReleased())
+		{
+			lift.moveVoltage(0);
+			if (liftUpButton.isPressed()&&liftDownButton.isPressed())
+			{
+				lift.moveVoltage(-500);
+			}
+		}
+
+		if (ringIntakeButton.isPressed())
 	{
 		if (isRingOn == false) {
 			ringMotor.moveVelocity(300);
@@ -276,7 +283,12 @@ void ring() {
 		}
 		pros::delay(200);
 	}
+
+		//pros::delay(20);
+	}
+
 }
+
 
 /*
 
